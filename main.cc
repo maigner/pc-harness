@@ -71,9 +71,9 @@ void Producer(unsigned id) {
     while (state->product != NULL && terminator == 0) {}
     if (terminator == 1) return;
     start = Rdtsc();
-    pi = calculate_pi(100);
-    //state->product = static_cast<Product*>(malloc(sizeof(Product))); //new Product();
-    state->product = reinterpret_cast<Product*>(1); //new Product();
+    //pi = calculate_pi(100);
+    state->product = static_cast<Product*>(malloc(sizeof(Product))); //new Product();
+    //state->product = reinterpret_cast<Product*>(1); //new Product();
     stat->allocation_time += Rdtsc() - start;
     //cout << "Produced " << state->product << endl;
     __sync_synchronize();
@@ -90,8 +90,8 @@ void Consumer(unsigned id) {
     while (state->product == NULL && terminator == 0) {}
     if (terminator == 1) return;
     start = Rdtsc();
-    pi = calculate_pi(100);
-    //free(const_cast<Product*>(state->product));
+    //pi = calculate_pi(100);
+    free(const_cast<Product*>(state->product));
     stat->deallocation_time += Rdtsc() - start;
     stat->throughput++;
     state->product = NULL;
