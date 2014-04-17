@@ -5,6 +5,8 @@
 
 using namespace std;
 
+// magic procided by scalloc
+extern "C" size_t malloc_core_id();
 
 struct Product {
   char payload[16];
@@ -60,9 +62,17 @@ double calculate_pi(int n) {
   return 8.0 * in / (static_cast<double>(n) * n);
 }
 
+void Dummy(unsigned id) {
+  void *ptr = malloc(16);
+  size_t core_id = malloc_core_id();
+  //printf("dummy assigned to %lu\n", core_id);
+}
 
 void Producer(unsigned id) {
-  SharedState* state = GetSharedState(id);
+  void *ptr = malloc(16);
+  size_t core_id = malloc_core_id();
+  //printf("producer assigned to %lu\n", core_id);
+  SharedState* state = &shared_states[core_id];
   Stat* stat = &stats[id];
   uint64_t start;
   double pi;
@@ -70,9 +80,12 @@ void Producer(unsigned id) {
   while (1) {
     while (state->product != NULL && terminator == 0) {}
     if (terminator == 1) return;
-    start = Rdtsc();
     //pi = calculate_pi(100);
+    start = Rdtsc();
     state->product = static_cast<Product*>(malloc(sizeof(Product))); //new Product();
+
+    //printf("%lu: %p\n", id, state->product);
+
     //state->product = reinterpret_cast<Product*>(1); //new Product();
     stat->allocation_time += Rdtsc() - start;
     //cout << "Produced " << state->product << endl;
@@ -81,7 +94,11 @@ void Producer(unsigned id) {
 }
 
 void Consumer(unsigned id) {
-  SharedState* state = GetSharedState(id);
+  void *ptr = malloc(16);
+  size_t core_id = malloc_core_id();
+  //printf("consumer assigned to %lu\n", core_id);
+  SharedState* state = &shared_states[(core_id + 1) % kNumThreadPairs];
+  //SharedState* state = &shared_states[core_id];
   Stat* stat = &stats[id];
   uint64_t start;
   double pi;
@@ -89,8 +106,8 @@ void Consumer(unsigned id) {
   while (1) {
     while (state->product == NULL && terminator == 0) {}
     if (terminator == 1) return;
-    start = Rdtsc();
     //pi = calculate_pi(100);
+    start = Rdtsc();
     free(const_cast<Product*>(state->product));
     stat->deallocation_time += Rdtsc() - start;
     stat->throughput++;
@@ -104,7 +121,7 @@ int main(int argc, char **argv) {
   if (argc > 1) {
     kNumThreadPairs = atoi(argv[1]);
   }
-
+  void *ptr = malloc(16);
   terminator = 0;
   __sync_synchronize();
 
@@ -113,8 +130,10 @@ int main(int argc, char **argv) {
   producers = (thread**)calloc(kNumThreadPairs, sizeof(thread*));
   consumers = (thread**)calloc(kNumThreadPairs, sizeof(thread*));
 
+  size_t kNumCoreBuffers = 80;
+
   int r = posix_memalign((void**)&shared_states, 128, 
-      kNumThreadPairs * sizeof(SharedState));
+      kNumCoreBuffers * sizeof(SharedState));
   r = posix_memalign((void**)&stats, 128, 
       2 * kNumThreadPairs * sizeof(Stat));
 
@@ -124,20 +143,30 @@ int main(int argc, char **argv) {
     Stat *consumer_stat = &stats[i+kNumThreadPairs];
 
     //printf("%p\t%p\t%p\n", state, producer_stat, consumer_stat);
-
-
     state->product = NULL;
     producer_stat->allocation_time = 0;
     consumer_stat->deallocation_time = 0;
     consumer_stat->throughput = 0;
-    
-    __sync_synchronize();
-    producers[i] = new thread(Producer, i);
-    consumers[i] = new thread(Consumer, i+kNumThreadPairs);
   } 
+    
+  __sync_synchronize();
+  
+  for (unsigned i = 0; i < kNumThreadPairs; ++i) {
+    producers[i] = new thread(Producer, i);
+    //consumers[i] = new thread(Consumer, i + kNumThreadPairs);
+  }
+  for (unsigned i = 0; i < kNumThreadPairs; ++i) {
+    thread *d = new thread(Dummy, i);
+    //producers[i] = new thread(Producer, i);
+    //consumers[i] = new thread(Consumer, i + kNumThreadPairs);
+  }
+  for (unsigned i = 0; i < kNumThreadPairs; ++i) {
+    //producers[i] = new thread(Producer, i);
+    consumers[i] = new thread(Consumer, i + kNumThreadPairs);
+  }
 
-  sleep(100);
 
+  sleep(20);
 
   terminator = 1;
   __sync_synchronize();
