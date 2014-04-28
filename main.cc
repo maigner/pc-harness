@@ -12,6 +12,8 @@ struct Product {
   char payload[16];
 };
 
+int do_dummies = 0;
+
 struct SharedState {
   Product* volatile product;
 } __attribute__((aligned(128)));
@@ -65,14 +67,15 @@ double calculate_pi(int n) {
 void Dummy(unsigned id) {
   void *ptr = malloc(16);
   size_t core_id = malloc_core_id();
-  //printf("dummy assigned to %lu\n", core_id);
+  printf("dummy assigned to %lu\n", core_id);
 }
 
 void Producer(unsigned id) {
   void *ptr = malloc(16);
   size_t core_id = malloc_core_id();
-  printf("producer assigned to %lu\n", core_id);
-  SharedState* state = &shared_states[core_id];
+  printf("producer %u assigned to %lu\n", id, core_id);
+
+  SharedState* state = &shared_states[id];
   Stat* stat = &stats[id];
   uint64_t start;
   double pi;
@@ -97,11 +100,11 @@ void Producer(unsigned id) {
 void Consumer(unsigned id) {
   void *ptr = malloc(16);
   size_t core_id = malloc_core_id();
-  printf("consumer assigned to %lu\n", core_id);
-  //SharedState* state = &shared_states[(core_id + 1) % kNumThreadPairs];
-  SharedState* state = &shared_states[core_id - kNumThreadPairs];
+  printf("consumer %u assigned to %lu\n", id, core_id);
+
+  SharedState *state = &shared_states[id];
   //SharedState* state = &shared_states[core_id];
-  Stat* stat = &stats[id];
+  Stat* stat = &stats[id+kNumThreadPairs];
   uint64_t start;
   double pi;
   //cout << state << endl;
@@ -124,6 +127,12 @@ int main(int argc, char **argv) {
   if (argc > 1) {
     kNumThreadPairs = atoi(argv[1]);
   }
+
+  if (argc > 2) {
+    do_dummies = atoi(argv[2]);
+  }
+
+
   void *ptr = malloc(16);
   terminator = 0;
   __sync_synchronize();
@@ -136,7 +145,7 @@ int main(int argc, char **argv) {
   size_t kNumCoreBuffers = 80;
 
   int r = posix_memalign((void**)&shared_states, 128, 
-      kNumCoreBuffers * sizeof(SharedState));
+      (1+kNumThreadPairs) * sizeof(SharedState));
   r = posix_memalign((void**)&stats, 128, 
       2 * kNumThreadPairs * sizeof(Stat));
 
@@ -161,19 +170,16 @@ int main(int argc, char **argv) {
 
   sleep(2); // hack to allow assignment of allocator
   
-  /*
-  for (unsigned i = 0; i < kNumThreadPairs+2; ++i) {
-    thread *d = new thread(Dummy, i);
-    //producers[i] = new thread(Producer, i);
-    //consumers[i] = new thread(Consumer, i + kNumThreadPairs);
+  if (do_dummies == 1) {
+    for (unsigned i = 0; i < kNumThreadPairs+2; ++i) {
+      thread *d = new thread(Dummy, i);
+    }
+    sleep(2); // hack to allow assignment of allocator
   }
-
-  sleep(2); // hack to allow assignment of allocator
-  */
   
   for (unsigned i = 0; i < kNumThreadPairs; ++i) {
     //producers[i] = new thread(Producer, i);
-    consumers[i] = new thread(Consumer, i + kNumThreadPairs);
+    consumers[i] = new thread(Consumer, i);
   }
 
 
