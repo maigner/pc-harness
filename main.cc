@@ -2,6 +2,7 @@
 #include <iostream>
 #include <thread>
 #include <unistd.h>
+#include <pthread.h>
 
 using namespace std;
 
@@ -13,6 +14,8 @@ struct Product {
 };
 
 int do_dummies = 0;
+
+pthread_barrier_t barrier;
 
 struct SharedState {
   Product* volatile product;
@@ -26,6 +29,7 @@ struct Stat {
 
 size_t kNumThreadPairs = 30;
 const uint64_t kCpuMHz = 2000;
+uint64_t kNumConsumptions = 1000;
 SharedState *shared_states;
 Stat *stats;
 int volatile terminator __attribute((aligned(128)));
@@ -67,15 +71,15 @@ double calculate_pi(int n) {
 void Dummy(unsigned id) {
   void *ptr = malloc(16);
   size_t core_id = malloc_core_id();
-  printf("dummy assigned to %lu\n", core_id);
+  //printf("dummy assigned to %lu\n", core_id);
 }
 
 void Producer(unsigned id) {
   void *ptr = malloc(16);
   size_t core_id = malloc_core_id();
-  printf("producer %u assigned to %lu\n", id, core_id);
+  //printf("producer %u assigned to %lu\n", id, core_id);
 
-  SharedState* state = &shared_states[id];
+  SharedState* state = &shared_states[core_id];
   Stat* stat = &stats[id];
   uint64_t start;
   double pi;
@@ -83,7 +87,7 @@ void Producer(unsigned id) {
   while (1) {
     while (state->product != NULL && terminator == 0) {}
     if (terminator == 1) break;
-    //pi = calculate_pi(100);
+    pi = calculate_pi(400);
     start = Rdtsc();
     state->product = static_cast<Product*>(malloc(sizeof(Product))); //new Product();
 
@@ -94,32 +98,50 @@ void Producer(unsigned id) {
     //cout << "Produced " << state->product << endl;
     __sync_synchronize();
   }
-  printf("producer finally at %lu\n", malloc_core_id());
+  //printf("producer finally at %lu\n", malloc_core_id());
 }
 
 void Consumer(unsigned id) {
   void *ptr = malloc(16);
   size_t core_id = malloc_core_id();
-  printf("consumer %u assigned to %lu\n", id, core_id);
 
-  SharedState *state = &shared_states[id];
-  //SharedState* state = &shared_states[core_id];
-  Stat* stat = &stats[id+kNumThreadPairs];
+  //TODO: make sure id, and core id are the same
+
+  SharedState *state = &shared_states[core_id];
+  if (do_dummies == 1) {
+    //in case of dummies, the consumers will run on the same CLABS as the producers
+    state = &shared_states[core_id];
+  //printf("consumer %u assigned to %lu taking slot %lu\n", id, core_id, core_id);
+  } else {
+    //if there are no dummies, we mast make sure that the consumer hits the producers shared state
+    state = &shared_states[core_id - kNumThreadPairs];
+  //printf("consumer %u assigned to %lu taking slot %lu\n", id, core_id, core_id-kNumThreadPairs);
+  }
+  
+  Stat* stat = &stats[id + kNumThreadPairs];
   uint64_t start;
   double pi;
+
+  pthread_barrier_wait(&barrier);
+
+
   //cout << state << endl;
   while (1) {
     while (state->product == NULL && terminator == 0) {}
     if (terminator == 1) break;
-    //pi = calculate_pi(100);
+    pi = calculate_pi(400);
     start = Rdtsc();
     free(const_cast<Product*>(state->product));
     stat->deallocation_time += Rdtsc() - start;
     stat->throughput++;
     state->product = NULL;
     __sync_synchronize();
+
+    if (stat->throughput >= kNumConsumptions) {
+      return;
+    }
   }
-  printf("consumer finally at %lu\n", malloc_core_id());
+  //printf("consumer %u finally at %lu\n", id, malloc_core_id());
 }
 
 int main(int argc, char **argv) {
@@ -132,6 +154,11 @@ int main(int argc, char **argv) {
     do_dummies = atoi(argv[2]);
   }
 
+  if (argc > 3) {
+    kNumConsumptions = atoi(argv[3]);
+  }
+
+  pthread_barrier_init(&barrier, NULL, kNumThreadPairs);
 
   void *ptr = malloc(16);
   terminator = 0;
@@ -170,6 +197,7 @@ int main(int argc, char **argv) {
 
   sleep(2); // hack to allow assignment of allocator
   
+  // add 2 more dummies to account for the thread-pair wasted by the main thread
   if (do_dummies == 1) {
     for (unsigned i = 0; i < kNumThreadPairs+2; ++i) {
       thread *d = new thread(Dummy, i);
@@ -183,14 +211,14 @@ int main(int argc, char **argv) {
   }
 
 
-  sleep(20);
+  //sleep(10);
 
-  terminator = 1;
-  __sync_synchronize();
+  //terminator = 1;
+  //__sync_synchronize();
 
 
   for (unsigned i = 0; i < kNumThreadPairs; ++i) {
-    producers[i]->join();
+    //producers[i]->join(); //LET EM RUN
     consumers[i]->join();
   } 
 
@@ -206,12 +234,12 @@ int main(int argc, char **argv) {
     throughput_total += consumer_stat->throughput;
   }
 
-  alloc_total /= (kCpuMHz * 1000);
-  dealloc_total /= (kCpuMHz * 1000);
+  alloc_total /= (kCpuMHz * 1000 * kNumThreadPairs);
+  dealloc_total /= (kCpuMHz * 1000 * kNumThreadPairs);
 
-  printf("n\talloc\tfree\tthroughput\n");
-  printf("%lu\t%lu\t%lu\t%lu\n",
-         kNumThreadPairs, alloc_total, dealloc_total, throughput_total);
+  printf("#n\tt-alloc/thread\tt-free\tt-combined/thread\tthroughput\n");
+  printf("%lu\t%lu\t%lu\t%lu\t%lu\n",
+         kNumThreadPairs, alloc_total, dealloc_total, alloc_total+dealloc_total, throughput_total);
 
 
   return EXIT_SUCCESS;
